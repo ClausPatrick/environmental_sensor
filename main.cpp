@@ -113,7 +113,7 @@ struct SensorData{
 
 struct SensorData sensor_data;
 
-void lcd_send(uint8_t *buf, uint8_t len_buf, uint8_t command_or_data){
+void lcd_send(uint8_t *buf, uint8_t len_buf, bool command_or_data){
     //printf("len buf: %d.\n", len_buf);
     uint8_t temp = 0;
     uint8_t d = 0;
@@ -121,25 +121,25 @@ void lcd_send(uint8_t *buf, uint8_t len_buf, uint8_t command_or_data){
         temp = buf[c];
         temp = temp >> 4;
         gpio_put(E, 1);
-        sleep_us(10);
+        busy_wait_us(10);
         for (d=0; d<4; d++){
             gpio_put(datapins[d], ((temp>>d) & 0b00000001));
         }
         gpio_put(RS, command_or_data);
-        sleep_us(10);
+        busy_wait_us(10);
         gpio_put(E, 0);
-        sleep_us(20);
+        busy_wait_us(20);
 
         temp = buf[c];
         gpio_put(E, 1);
-        sleep_us(10);
+        busy_wait_us(10);
         for (d=0; d<4; d++){
             gpio_put(datapins[d], ((temp>>d) & 0b00000001));
         }
         gpio_put(RS, command_or_data);
-        sleep_us(10);
+        busy_wait_us(10);
         gpio_put(E, 0);
-        sleep_us(20);
+        busy_wait_us(20);
         for (d=0; d<4; d++){
             gpio_put(datapins[d], 0);
         }
@@ -158,9 +158,10 @@ void lcd_init(){
         const int lcd_initialisation_delay_times[] = {100, 100, 100, 40, 40, 40, 1600, 1600, 0};
         for (int i=0; i<9; i++){
                 lcd_send(&initialisation_commands[i], 1, RS_COMMAND );
-                sleep_us(300+lcd_initialisation_delay_times[i]);
+                busy_wait_us(300+lcd_initialisation_delay_times[i]);
         }
-        sleep_ms(100);
+        //sleep_ms(100);
+        busy_wait_us(100000);
         return;
 }
 
@@ -285,59 +286,58 @@ int temp_conv(float t){
 int sgp40(int* voc, float t, float p){
     uint16_t DEFAULT_COMPENSATION_RH = 0x8000;  // in ticks as defined by SGP40
     uint16_t DEFAULT_COMPENSATION_T = 0x6666;   // in ticks as defined by SGP40I
-    uint16_t error = 0;
+    uint16_t return_val = 0;
     int32_t voc_index_value = 0;
     uint16_t default_rh = 0x8000;
     uint16_t default_t = 0x6666;
     default_rh = (uint16_t) (hum_conv(p));
     default_t = (uint16_t) (temp_conv(t));
     uint16_t sraw_voc;
-    error = sgp40_measure_raw_signal(default_rh, default_t, &sraw_voc);
+    return_val = sgp40_measure_raw_signal(default_rh, default_t, &sraw_voc);
+    gpio_put(RG0_R_PIN, 1);
+    if (return_val!=0){
+        printf("--------I2C write error SGP40 (0): %d\n", return_val);
+    }else{
+        gpio_put(RG0_R_PIN, 0);
+    }
     GasIndexAlgorithm_process(&voc_params, sraw_voc, &voc_index_value);
     *voc = voc_index_value;
-    return 0;
+    return return_val;
 }
 
 
-int am2321(float* out_temperature, float* out_humidity){
+int am2320(float* out_temperature, float* out_humidity){
     int return_val;
+    int i;
     uint8_t data[8];
     data[0] = 0x03;
     data[1] = 0x00;
     data[2] = 0x04;
-    i2c_write_blocking(i2c0, AM_ADDR, data, 3, 0);
-    if (return_val < 0){
-        printf("--------I2C write error (0): %d\n", return_val);
-    }
-    sleep_us(1000);
     return_val = i2c_write_blocking(i2c0, AM_ADDR, data, 3, 0);
-    if (return_val < 0){
-        printf("--------I2C write error (1): %d\n", return_val);
+//    gpio_put(RG0_R_PIN, 1);
+//    if (return_val!=3){
+//        printf("--------I2C write error AM2320(0): %d\n", return_val);
+//    }else{
+//        gpio_put(RG0_R_PIN, 0);
+//    }
+    busy_wait_us(1000);
+    return_val = i2c_write_blocking(i2c0, AM_ADDR, data, 3, 0);
+    gpio_put(RG0_R_PIN, 1);
+    if (return_val!=3){
+        printf("--------I2C write error AM2320(1): %d\n", return_val);
+    }else{
+        gpio_put(RG0_R_PIN, 0);
     }
-    sleep_us(1600);
-
-  /*
-   * Read out 8 bytes of data
-   * Byte 0: Should be Modbus function code 0x03
-   * Byte 1: Should be number of registers to read (0x04)
-   * Byte 2: Humidity msb
-   * Byte 3: Humidity lsb
-   * Byte 4: Temperature msb
-   * Byte 5: Temperature lsb
-   * Byte 6: CRC lsb byte
-   * Byte 7: CRC msb byte
-   */
+    busy_wait_us(1600);
 
     return_val = i2c_read_blocking(i2c0, AM_ADDR, data, 8, 0);
-    if (return_val < 0){
+    gpio_put(RG0_R_PIN, 1);
+    if (return_val!=8){
         printf("--------I2C read error (3): %d\n", return_val);
-    }
-    if (return_val != 8){
-        printf("--------I2C read error (4): %d\n", return_val);
     }else{
+        gpio_put(RG0_R_PIN, 0);
         return_val = 0;
     }
-    int i;
 
     /* Check data[0] and data[1] */
     if (data[0] != 0x03 || data[1] != 0x04)
@@ -354,15 +354,6 @@ int am2321(float* out_temperature, float* out_humidity){
     uint16_t humi16 = _combine_bytes(data[2], data[3]);
     //printf("temp=%u 0x%04x  hum=%u 0x%04x\n", temp16, temp16, humi16, humi16);
 
-    /* Temperature resolution is 16Bit,
-     * temperature highest bit (Bit15) is equal to 1 indicates a
-     * negative temperature, the temperature highest bit (Bit15)
-     * is equal to 0 indicates a positive temperature;
-     * temperature in addition to the most significant bit (Bit14 ~ Bit0)
-     *  indicates the temperature sensor string value.
-     * Temperature sensor value is a string of 10 times the
-     * actual temperature value.
-     */
     if (temp16 & 0x8000)
       temp16 = -(temp16 & 0x7FFF);
 
@@ -373,31 +364,53 @@ int am2321(float* out_temperature, float* out_humidity){
 
 int pmsa003i(uint8_t* buffer){
     int return_val;
-    return_val = i2c_read_blocking(i2c0, PMSA_ADDR, buffer, 32, 0);
+    return_val  = i2c_read_blocking(i2c0, PMSA_ADDR, buffer, 32, 0);
+    gpio_put(RG0_R_PIN, 1);
+    if (return_val!=32){
+        printf("--------I2C write error PMSA003i (0): %d\n", return_val);
+    }else{
+        gpio_put(RG0_R_PIN, 0);
+        return_val = 0;
+    }
   // Check that start byte is correct!
     if (buffer[0] != 0x42) {
         gpio_put(RG0_R_PIN, 1);
+        printf("--------I2C write error PMSA003i (1): %d\n", return_val);
         return_val = 1;
+    }else{
+        gpio_put(RG0_R_PIN, 0);
+        return_val = 0;
     }
 
     // get checksum ready
-
     return return_val;
 }
 
 void sensor_read(struct SensorData* sensor_data){
     if (sensor_run_flag){
+        int return_val, i = 0;
+        int return_vals[3];
+        gpio_put(RG0_R_PIN, 0);
         sensor_run_flag = 0;
         //pmsa003i(pm_buffer);
-        pmsa003i(sensor_data->Particles_u8);
-        //am2321(&t, &h);
-        am2321(&sensor_data->Temperature, &sensor_data->Humidity);
+        return_vals[0] = pmsa003i(sensor_data->Particles_u8);
+        //am2320(&t, &h);
+        return_vals[1] = am2320(&sensor_data->Temperature, &sensor_data->Humidity);
         //sgp40(&voc, t, h);
-        sgp40(&sensor_data->Voc, sensor_data->Temperature, sensor_data->Humidity);
+        return_vals[2] = sgp40(&sensor_data->Voc, sensor_data->Temperature, sensor_data->Humidity);
         //global_voc = voc;
-        global_voc = sensor_data->Voc;
-        sensor_data_ready_flag = 1;
-        gpio_put(RG0_G_PIN, 0);
+        for (i=0; i<3; i++){
+            return_val = return_val = return_vals[i];
+        }
+        if (return_val==0){
+            global_voc = sensor_data->Voc;
+            sensor_data_ready_flag = 1;
+            gpio_put(RG0_G_PIN, 0);
+        }else{
+            printf("--------I2C error (0): %d\n", return_val);
+            sensor_data_ready_flag = 0;
+        }
+
     }
 }
 
@@ -481,7 +494,8 @@ void core1(){
     sensor_datap = &sensor_data;
 
     lcd_init();
-    sleep_ms(1000); // .
+    //sleep_ms(1000); // .
+    busy_wait_us(100000); // .
     while (1){
         index = 0;
         index = copy_str(th_dis, "T: ", index);
@@ -494,8 +508,8 @@ void core1(){
         th_dis[index] = 0;
         lcd_print(th_dis);
 
-        sleep_ms(500);
         t = 1 - t;
+        busy_wait_us(100000);
         //gpio_put(RG1_R_PIN, t);
 
     }
@@ -507,7 +521,8 @@ int main(){
     stdio_usb_init();
     struct Message_out* inbound_message;
 
-    sleep_ms(1000); // Waiting for stdio_usb_init() to settle.
+    //sleep_ms(1000); // Waiting for stdio_usb_init() to settle.
+    busy_wait_us(100000); // Waiting for stdio_usb_init() to settle.
     io_setup();
     LED_table_setup();
     message_setup();
@@ -569,4 +584,6 @@ bool sensor_ticker(repeating_timer_t *rs){
     gpio_put(RG0_G_PIN, 1);
     return true;
 }
+
+
 
