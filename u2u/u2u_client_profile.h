@@ -4,7 +4,7 @@
 
 
 #define U2U_PLATFORM_CHANNELS 2
-#define SELF_NAME  "BLOODHOUND"
+#define SELF_NAME  "NODENAME"
 
 
 #define UART_RX_IN 13
